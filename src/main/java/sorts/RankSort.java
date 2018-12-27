@@ -1,8 +1,7 @@
 package sorts;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
 
 public class RankSort implements Sortable {
 
@@ -36,146 +35,142 @@ public class RankSort implements Sortable {
 	}
 
 	@Override
-	public int[] sortThreaded(int version, int[] in, int threads) throws Exception {
-		switch (version) {
-		case 0:
-			return sortThreaded0(in, threads);
-		case 1:
-			return sortThreaded1(in, threads);
-		}
-		return null;
-	}
-
-	public int[] sortThreaded0(int[] in, int threads) throws Exception {
-		class OddEvenSortRunnable implements Runnable {
-			private int s;
-			private int e;
-			private int step;
-			private int[] in;
-			public boolean swaps;
-
-			OddEvenSortRunnable(int[] in, int s, int step) {
-				this.s = s;
-				this.in = in;
-				this.e = in.length - 1;
-				this.step = step;
-			}
-
-			public void run() {
-				swaps = false;
-				int aux;
-				for (int i = s; i < e; i += step) {
-					if (in[i] > in[i + 1]) {
-						aux = in[i];
-						in[i] = in[i + 1];
-						in[i + 1] = aux;
-						swaps = true;
-					}
-				}
-			}
-		}
-
-		OddEvenSortRunnable[] runnersOdd = new OddEvenSortRunnable[threads];
-		OddEvenSortRunnable[] runnersEven = new OddEvenSortRunnable[threads];
-
-		int i;
-		for (i = 0; i < threads; i++) {
-			// System.out.println(i + "-" + (i * 2) + "-" + (i * 2 + 1));
-			runnersOdd[i] = new OddEvenSortRunnable(in, i * 2, threads);
-			runnersEven[i] = new OddEvenSortRunnable(in, i * 2 + 1, threads);
-		}
-
-		Future<?>[] results = new Future<?>[threads];
-
-		ExecutorService executor = Executors.newFixedThreadPool(threads);
-		boolean swaps = true;
-		while (swaps) {
-			// System.out.println("Loop " + j);
-			for (i = 0; i < threads; i++) {
-				results[i] = executor.submit(runnersOdd[i]);
-			}
-			swaps = false;
-			for (i = 0; i < threads; i++) {
-				results[i].get();
-				swaps = swaps | runnersOdd[i].swaps;
-			}
-			for (i = 0; i < threads; i++) {
-				results[i] = executor.submit(runnersEven[i]);
-			}
-			for (i = 0; i < threads; i++) {
-				results[i].get();
-				swaps = swaps | runnersEven[i].swaps;
-			}
-			// System.out.println("Loop End " + j);
-		}
-		executor.shutdown();
-		// System.out.println("Finallizing");
-
-		return in;
-	}
-
-	@Override
 	public String toString() {
 		return "RankSort";
 	}
 
-	public int[] sortThreaded1(int[] in, int threads) throws Exception {
-		class OddEvenSortRunnable implements Runnable {
+	@Override
+	public int[] sortThreaded(int version, int[] in, int threads) throws Exception {
+		switch (version) {
+		case 0:
+			return rankByFragmentsJoinAtTheFinal(in, threads);
+		}
+		return null;
+	}
+
+	public int[] rankByFragmentsJoinAtTheFinal(int[] in, int threads) throws Exception {
+
+		class RankSortRunnable extends HelperRunnable {
+			CyclicBarrier barrier;
 			private int s;
 			private int e;
-			private int step;
+			private int n;
+			private int id;
+			private int join;
 			private int[] in;
-			public boolean swaps;
+			private int[] result;
+			public boolean joinb = true;
+			RankSortRunnable[] runners;
 
-			OddEvenSortRunnable(int[] in, int s, int step) {
+			RankSortRunnable(int[] in, int s, int end, CyclicBarrier barrier, int id, RankSortRunnable[] runners) {
 				this.s = s;
 				this.in = in;
-				this.e = in.length - 1;
-				this.step = step;
+				this.e = end;
+				this.n = e - s;
+				this.barrier = barrier;
+				this.result = new int[n];
+				this.id = id;
+				this.join = 1;
+				this.runners = runners;
 			}
 
 			public void run() {
-				swaps = false;
-				int aux;
-				for (int i = s; i < e; i += step) {
-					if (in[i] > in[i + 1]) {
-						aux = in[i];
-						in[i] = in[i + 1];
-						in[i + 1] = aux;
-						swaps = true;
+				int i, j, k;
+				int[] out = new int[n];
+				int rank;
+
+				for (i = s; i < e; ++i) {
+					rank = 0;
+					for (j = s; j < e; ++j) {
+						if (in[j] < in[i]) {
+							++rank;
+						}
+					}
+					out[rank] = in[i];
+				}
+				for (k = 0; k < n; ++k) {
+					if (out[k] == 0) {
+						if (k != 0) {
+							result[k] = result[k - 1];
+						} else {
+							result[k] = 0;
+						}
+					} else {
+						result[k] = out[k];
 					}
 				}
+
+				try {
+					barrier.await();
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				} catch (BrokenBarrierException e) {
+					e.printStackTrace();
+				}
+				// Join
+				while (join < threads) {
+					if (!joinb || id + join > threads - 1) {
+					} else {
+						int[] r = new int[result.length + runners[id + join].result.length];
+						merge(result, runners[id + join].result, r);
+						result = r;
+						runners[id + join].result = null;
+					}
+
+					join <<= 1;
+					try {
+						barrier.await();
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					} catch (BrokenBarrierException e) {
+						e.printStackTrace();
+					}
+				}
+
 			}
 		}
+		class RankSortRunnableChecker implements Runnable {
+			RankSortRunnable[] runners;
+			int start = 1;
+			int join = 2;
 
-		OddEvenSortRunnable[] runners = new OddEvenSortRunnable[threads];
+			public RankSortRunnableChecker(RankSortRunnable[] runners) {
+				this.runners = runners;
+			}
 
+			@Override
+			public void run() {
+				for (int i = start; i < threads; i += join) {
+					runners[i].joinb = false;
+				}
+				start <<= 1;
+				join <<= 1;
+			}
+
+		}
+
+		RankSortRunnable[] runners = new RankSortRunnable[threads];
+		RankSortRunnableChecker checker = new RankSortRunnableChecker(runners);
+		CyclicBarrier barrier = new CyclicBarrier(threads, checker);
+		int chunks = in.length / threads;
+		int index = 0;
 		int i;
+		for (i = 0; i < threads - 1; i++) {
+			runners[i] = new RankSortRunnable(in, index, index + chunks, barrier, i, runners);
+			index += chunks;
+		}
+		runners[i] = new RankSortRunnable(in, index, in.length, barrier, i, runners);
+
+		Thread[] results = new Thread[threads];
 		for (i = 0; i < threads; i++) {
-			// System.out.println(i + "-" + (i * 2) + "-" + (i * 2 + 1));
-			runners[i] = new OddEvenSortRunnable(in, i * 2, threads);
+			results[i] = new Thread(runners[i], "RankSortT-" + i);
+			results[i].setDaemon(true);
+			results[i].start();
 		}
-
-		Future<?>[] results = new Future<?>[threads];
-
-		ExecutorService executor = Executors.newFixedThreadPool(threads);
-		boolean swaps = true;
-		while (swaps) {
-			// System.out.println("Loop " + j);
-			for (i = 0; i < threads; i++) {
-				results[i] = executor.submit(runners[i]);
-			}
-			swaps = false;
-			for (i = 0; i < threads; i++) {
-				results[i].get();
-				swaps = swaps | runners[i].swaps;
-			}
-			// System.out.println("Loop End " + j);
+		for (i = 0; i < threads; i++) {
+			results[i].join();
 		}
-		executor.shutdown();
-		// System.out.println("Finallizing");
-
-		return in;
+		return runners[0].result;
 	}
 
 }

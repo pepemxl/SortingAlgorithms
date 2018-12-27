@@ -1,5 +1,7 @@
 package sorts;
 
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -26,10 +28,15 @@ public class BubbleSort implements Sortable {
 	}
 
 	@Override
+	public String toString() {
+		return "BubbleSort";
+	}
+
+	@Override
 	public int[] sortThreaded(int version, int[] in, int threads) throws Exception {
 		switch (version) {
 		case 0:
-			return sortThreaded0(in, threads);
+			return bubleByFragmentsJoinAtTheFinal(in, threads);
 		case 1:
 			return sortThreaded1(in, threads);
 		}
@@ -93,11 +100,6 @@ public class BubbleSort implements Sortable {
 		// System.out.println("Finallizing");
 
 		return in;
-	}
-
-	@Override
-	public String toString() {
-		return "BubbleSort";
 	}
 
 	public int[] sortThreaded1(int[] in, int threads) throws Exception {
@@ -205,6 +207,127 @@ public class BubbleSort implements Sortable {
 		}
 		executor.shutdown();
 		// System.out.println("Finallizing");
+
+		return in;
+	}
+
+	public int[] bubleByFragmentsJoinAtTheFinal(int[] in, int threads) throws Exception {
+
+		int[] buff = new int[in.length];
+
+		class BubbleSortRunnable extends HelperRunnable {
+			CyclicBarrier barrier;
+			private int s;
+			private int e;
+			private int id;
+			private int join;
+			private int[] in;
+			public boolean joinb = true;
+			BubbleSortRunnable[] runners;
+
+			BubbleSortRunnable(int[] in, int s, int end, CyclicBarrier barrier, int id, BubbleSortRunnable[] runners) {
+				this.s = s;
+				this.in = in;
+				this.e = end;
+				this.barrier = barrier;
+				this.id = id;
+				this.join = 1;
+				this.runners = runners;
+			}
+
+			public void run() {
+				boolean swaps = true;
+				int aux;
+				int i;
+				while (swaps) {
+					swaps = false;
+					for (i = s; i < e - 1; ++i) {
+						if (in[i] > in[i + 1]) {
+							aux = in[i];
+							in[i] = in[i + 1];
+							in[i + 1] = aux;
+							swaps = true;
+						}
+					}
+				}
+				// System.out.println("size:" + result.length + " - " +
+				// Arrays.toString(result));
+
+				try {
+					barrier.await();
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				} catch (BrokenBarrierException e) {
+					e.printStackTrace();
+				}
+
+				// Join
+				while (join < threads) {
+					if (!joinb || id + join > threads - 1) {
+					} else {
+
+						merge(in, buff, s, e, runners[id + join].s, runners[id + join].e);
+						for (i = s; i < runners[id + join].e; ++i) {
+							in[i] = buff[i];
+						}
+
+						e = runners[id + join].e;
+					}
+
+					join <<= 1;
+					try {
+						barrier.await();
+
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					} catch (BrokenBarrierException e) {
+						e.printStackTrace();
+					}
+				}
+
+			}
+		}
+		class BubbleSortRunnableChecker implements Runnable {
+			BubbleSortRunnable[] runners;
+			int start = 1;
+			int join = 2;
+
+			public BubbleSortRunnableChecker(BubbleSortRunnable[] runners) {
+				this.runners = runners;
+			}
+
+			@Override
+			public void run() {
+				for (int i = start; i < threads; i += join) {
+					runners[i].joinb = false;
+				}
+				start <<= 1;
+				join <<= 1;
+			}
+
+		}
+
+		BubbleSortRunnable[] runners = new BubbleSortRunnable[threads];
+		BubbleSortRunnableChecker checker = new BubbleSortRunnableChecker(runners);
+		CyclicBarrier barrier = new CyclicBarrier(threads, checker);
+		int chunks = in.length / threads;
+		int index = 0;
+		int i;
+		for (i = 0; i < threads - 1; i++) {
+			runners[i] = new BubbleSortRunnable(in, index, index + chunks, barrier, i, runners);
+			index += chunks;
+		}
+		runners[i] = new BubbleSortRunnable(in, index, in.length, barrier, i, runners);
+
+		Thread[] results = new Thread[threads];
+		for (i = 0; i < threads; i++) {
+			results[i] = new Thread(runners[i], "BubbleSortT-" + i);
+			results[i].setDaemon(true);
+			results[i].start();
+		}
+		for (i = 0; i < threads; i++) {
+			results[i].join();
+		}
 
 		return in;
 	}
